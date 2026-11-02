@@ -130,13 +130,26 @@
 
   footer { margin-top: 30px; }
   footer h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
-  .export { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .export button {
+  .export, .sync { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .export button, .sync button {
     font-size: 15px; padding: 12px;
     border: 1px solid var(--line); border-radius: 12px;
     background: var(--card); color: var(--text);
   }
+  .sync button:disabled { opacity: .5; }
+  footer h3.sync-title { margin-top: 26px; }
   footer p { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+
+  .gh-settings { margin-top: 12px; font-size: 14px; }
+  .gh-settings summary { color: var(--muted); padding: 6px 0; }
+  .gh-settings label { display: block; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .gh-settings input {
+    display: block; width: 100%; margin-top: 4px;
+    font-size: 16px;           /* >=16px hindrar iOS från att zooma */
+    padding: 10px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -165,7 +178,27 @@
       <button type="button" id="exp-csv">CSV</button>
       <button type="button" id="exp-json">JSON</button>
     </div>
-    <p>Datan sparas bara på den här telefonen. Exportera då och då som backup.</p>
+
+    <h3 class="sync-title">GitHub-synk</h3>
+    <div class="sync">
+      <button type="button" id="gh-push">Spara till GitHub</button>
+      <button type="button" id="gh-pull">Hämta från GitHub</button>
+    </div>
+    <div class="toast" id="gh-status" role="status" aria-live="polite"></div>
+    <details class="gh-settings" id="gh-settings">
+      <summary>Inställningar</summary>
+      <label>GitHub-användare
+        <input id="gh-owner" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <label>Repo för datan (privat)
+        <input id="gh-repo" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <label>Token (Contents: Read and write)
+        <input id="gh-token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+    </details>
+
+    <p>Datan sparas på den här telefonen. Spara till GitHub eller exportera då och då som backup.</p>
   </footer>
 </main>
 
@@ -363,6 +396,193 @@
     exportFile(`tagglogg-${stamp()}.csv`, 'text/csv', buildCSV()));
   document.getElementById('exp-json').addEventListener('click', () =>
     exportFile(`tagglogg-${stamp()}.json`, 'application/json', JSON.stringify(data, null, 2)));
+
+  // ---------- GitHub-synk ----------
+  // Sparar samma JSON som exporten som taglogg.json i ett privat repo (GitHubs contents-API).
+  // Varje sparning blir en commit. Telefonen är huvudlager, GitHub är backup/synk ("senaste vinner").
+  // Inställningarna (inkl. token) ligger i en egen nyckel och följer aldrig med i exporten.
+  const GH_KEY = 'tagglogg:github';
+  const PULL_BACKUP_KEY = 'tagglogg:data:backup-before-pull';
+  const GH_FILE = 'taglogg.json';
+  const GH_DEFAULTS = { owner: 'vickehandboll', repo: 'taglogg-data', token: '', lastSha: '', lastSync: 0 };
+  const ERR_NOT_FOUND = 'Hittade inte repot eller filen (404). Kontrollera användarnamn, reponamn och att token gäller det repot.';
+
+  const ghOwnerEl = document.getElementById('gh-owner');
+  const ghRepoEl = document.getElementById('gh-repo');
+  const ghTokenEl = document.getElementById('gh-token');
+  const ghStatusEl = document.getElementById('gh-status');
+  const ghSettingsEl = document.getElementById('gh-settings');
+  const ghPushBtn = document.getElementById('gh-push');
+  const ghPullBtn = document.getElementById('gh-pull');
+
+  function ghLoad() {
+    try { return Object.assign({}, GH_DEFAULTS, JSON.parse(localStorage.getItem(GH_KEY) || '{}')); }
+    catch (e) { return Object.assign({}, GH_DEFAULTS); }
+  }
+  function ghStore() {
+    try { localStorage.setItem(GH_KEY, JSON.stringify(gh)); } catch (e) {}
+  }
+
+  // lastSha = filens version på GitHub vid senaste lyckade spara/hämta. Används för att upptäcka
+  // att GitHub-filen ändrats av något annat än den här telefonen innan vi skriver över den.
+  let gh = ghLoad();
+  let ghBusy = false;
+
+  function ghStatus(msg, isError) {
+    ghStatusEl.textContent = msg;
+    ghStatusEl.classList.toggle('error', !!isError);
+  }
+
+  function ghIdleStatus() {
+    ghStatus(gh.lastSync ? `Senast synkat ${dayKey(gh.lastSync)} ${timeStr(gh.lastSync)}.` : '');
+  }
+
+  function toBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  function fromBase64(b64) {
+    const bin = atob(b64);   // atob struntar i radbrytningarna som GitHub lägger in
+    return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  }
+
+  function validEntry(e) {
+    return !!e && typeof e.id === 'string' && typeof e.number === 'string' && Number.isFinite(e.ts);
+  }
+
+  // Läser fälten, sparar dem och kollar att inget saknas. Returnerar false (och öppnar rutan) om något saknas.
+  function ghReadSettings() {
+    const owner = ghOwnerEl.value.trim();
+    const repo = ghRepoEl.value.trim();
+    const token = ghTokenEl.value.trim();
+    if (owner !== gh.owner || repo !== gh.repo) gh.lastSha = '';   // annat repo = ingen känd synkpunkt
+    gh.owner = owner; gh.repo = repo; gh.token = token;
+    ghStore();
+    if (!owner || !repo || !token) {
+      ghSettingsEl.open = true;
+      ghStatus('Fyll i användare, repo och token under Inställningar.', true);
+      return false;
+    }
+    return true;
+  }
+
+  async function ghRequest(method, body, accept) {
+    const url = `https://api.github.com/repos/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/contents/${GH_FILE}`;
+    const headers = { 'Authorization': 'Bearer ' + gh.token, 'Accept': accept || 'application/vnd.github+json' };
+    if (body) headers['Content-Type'] = 'application/json';
+    try {
+      // no-store: GitHub låter webbläsaren cacha svar en minut, och då får vi en gammal sha.
+      return await fetch(url, { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined });
+    } catch (e) {
+      throw new Error('Ingen uppkoppling till GitHub. Försök igen.');
+    }
+  }
+
+  async function ghErrorText(res) {
+    let msg = '';
+    try { msg = (await res.json()).message || ''; } catch (_) {}
+    if (res.status === 401) return 'Token ogiltig eller utgången (401). Skapa en ny på GitHub.';
+    if (res.status === 403) return `Ingen åtkomst (403). Kontrollera att token har Contents: Read and write för repot. ${msg}`.trim();
+    if (res.status === 404) return ERR_NOT_FOUND;
+    if (res.status === 409 || res.status === 422) return `Filen ändrades på GitHub under tiden. Försök igen. ${msg}`.trim();
+    return `GitHub svarade ${res.status}. ${msg}`.trim();
+  }
+
+  // Hämtar filen: { sha, text } eller null om den inte finns.
+  async function ghGet() {
+    const res = await ghRequest('GET');
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(await ghErrorText(res));
+    const j = await res.json();
+    let text;
+    if (j.encoding === 'base64') {
+      text = fromBase64(j.content);
+    } else {
+      // Filer över 1 MB kommer utan innehåll i första svaret; hämta råtexten i stället.
+      const raw = await ghRequest('GET', null, 'application/vnd.github.raw+json');
+      if (!raw.ok) throw new Error(await ghErrorText(raw));
+      text = await raw.text();
+    }
+    return { sha: j.sha, text };
+  }
+
+  function countEntries(text) {
+    try { return JSON.parse(text).entries.length; } catch (e) { return null; }
+  }
+
+  async function ghPush() {
+    ghStatus('Sparar till GitHub…');
+    const remote = await ghGet();
+    if (remote && remote.sha !== gh.lastSha) {
+      const n = countEntries(remote.text);
+      const remoteInfo = n === null ? '' : ` (${n} loggningar)`;
+      if (!confirm(`GitHub har en version${remoteInfo} som den här telefonen inte har hämtat eller sparat själv. Telefonen har ${data.entries.length} loggningar. Skriva över GitHub-versionen?`)) {
+        ghStatus('Avbrutet. Inget sparades.');
+        return;
+      }
+    }
+    const body = {
+      message: `Tåglogg: ${data.entries.length} loggningar (${dayKey(Date.now())} ${timeStr(Date.now())})`,
+      content: toBase64(JSON.stringify(data, null, 2))
+    };
+    if (remote) body.sha = remote.sha;
+    const res = await ghRequest('PUT', body);
+    if (!res.ok) throw new Error(await ghErrorText(res));
+    const j = await res.json();
+    gh.lastSha = j.content.sha;
+    gh.lastSync = Date.now();
+    ghStore();
+    ghStatus(`Sparat till GitHub: ${data.entries.length} loggningar.`);
+  }
+
+  async function ghPull() {
+    ghStatus('Hämtar från GitHub…');
+    const remote = await ghGet();
+    if (!remote) throw new Error(ERR_NOT_FOUND);
+    let d;
+    try { d = JSON.parse(remote.text); } catch (e) { throw new Error('Filen på GitHub är inte giltig JSON.'); }
+    if (!d || !Array.isArray(d.entries) || !d.entries.every(validEntry)) throw new Error('Filen på GitHub har ett format som appen inte förstår.');
+    if (d.version > VERSION) throw new Error('Filen är sparad av en nyare version av appen. Uppdatera appen först.');
+    d = migrate(d);
+
+    if (!confirm(`Ersätta datan på telefonen (${data.entries.length} loggningar) med GitHub-versionen (${d.entries.length} loggningar)? En kopia av nuvarande data sparas först.`)) {
+      ghStatus('Avbrutet. Inget ändrades.');
+      return;
+    }
+    // Ersätter vi lokal data ska en kopia finnas kvar, annars avbryter vi.
+    try { localStorage.setItem(PULL_BACKUP_KEY, JSON.stringify(data)); }
+    catch (e) { throw new Error('Kunde inte spara en säkerhetskopia av nuvarande data. Exportera JSON först. Inget ändrades.'); }
+
+    const old = data;
+    data = d;
+    if (!save()) { data = old; throw new Error('Kunde inte spara den hämtade datan på telefonen. Inget ändrades.'); }
+    gh.lastSha = remote.sha;
+    gh.lastSync = Date.now();
+    ghStore();
+    render();
+    ghStatus(`Hämtat från GitHub: ${data.entries.length} loggningar.`);
+  }
+
+  async function ghRun(action) {
+    if (ghBusy) return;
+    if (!ghReadSettings()) return;
+    ghBusy = true;
+    ghPushBtn.disabled = ghPullBtn.disabled = true;
+    try { await action(); }
+    catch (e) { ghStatus(e.message, true); }
+    finally { ghBusy = false; ghPushBtn.disabled = ghPullBtn.disabled = false; }
+  }
+
+  ghOwnerEl.value = gh.owner;
+  ghRepoEl.value = gh.repo;
+  ghTokenEl.value = gh.token;
+  ghSettingsEl.open = !gh.token;
+  ghIdleStatus();
+  ghPushBtn.addEventListener('click', () => ghRun(ghPush));
+  ghPullBtn.addEventListener('click', () => ghRun(ghPull));
 
   // ---------- Start ----------
   render();

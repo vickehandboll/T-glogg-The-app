@@ -1,5 +1,5 @@
 // Höj versionen varje gång en fil i appen ändras, annars visar telefonen den gamla cachade versionen.
-const CACHE = 'tagglogg-v1';
+const CACHE = 'tagglogg-v2';
 
 const ASSETS = [
   './',
@@ -25,6 +25,7 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+  if (new URL(event.request.url).origin !== self.location.origin) return;   // t.ex. api.github.com går rakt ut
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request))
   );
