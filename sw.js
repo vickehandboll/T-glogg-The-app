@@ -1,5 +1,5 @@
 // Höj versionen varje gång en fil i appen ändras, annars visar telefonen den gamla cachade versionen.
-const CACHE = 'tagglogg-v5';
+const CACHE = 'tagglogg-v6';
 
 const ASSETS = [
   './',

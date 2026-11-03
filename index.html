@@ -77,12 +77,24 @@
   .logger input:focus { border-color: var(--accent); }
   .fields { display: grid; grid-template-columns: 5fr 7fr; gap: 10px; }
   .fields input { min-width: 0; }
+  .hintrow { display: flex; align-items: center; gap: 8px; height: 36px; margin-top: 6px; }   /* fast höjd: knapparna ska inte hoppa */
   .namehint {
-    height: 20px; line-height: 20px; margin-top: 6px;   /* fast höjd så att knapparna inte hoppar när namnet dyker upp */
+    flex: 1; min-width: 0;
+    height: 20px; line-height: 20px;
     font-size: 15px; font-weight: 600; color: var(--accent);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .namehint + .buttons { margin-top: 4px; }
+  .mult {
+    flex: none; max-width: 58%;
+    height: 34px; padding: 0 14px;
+    font-size: 14px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--bg); color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mult[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .mult:disabled { opacity: .45; }
+  .hintrow + .buttons { margin-top: 2px; }
   .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .buttons button {
     font-size: 19px; font-weight: 600;
@@ -125,6 +137,15 @@
   .entry .time { color: var(--muted); font-variant-numeric: tabular-nums; width: 46px; flex: none; }
   .entry .num { flex: 1; font-weight: 600; font-size: 18px; word-break: break-word; }
   .entry .num .vname { display: block; font-size: 14px; font-weight: 400; color: var(--muted); }
+
+  /* Vagnar som gick i mult i samma tåg: en lodrät linje med en punkt för varje vagn. */
+  .entry.grp { position: relative; padding-left: 32px; }
+  .entry.grp::before { content: ''; position: absolute; left: 17px; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+  .entry.grp:not(.first)::before { top: -1px; }
+  .entry.grp.first::before { top: 50%; }
+  .entry.grp.last::before { bottom: 50%; }
+  .entry.grp::after { content: ''; position: absolute; left: 13px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--accent); }
+  .entry.grp:not(.first) { border-top-color: transparent; }
   .badge {
     font-size: 12px; font-weight: 600; color: #fff;
     padding: 3px 9px; border-radius: 999px; flex: none;
@@ -176,7 +197,10 @@
              autocomplete="off" autocorrect="off" spellcheck="false"
              enterkeyhint="done" aria-label="Fordonsnummer">
     </div>
-    <div class="namehint" id="namehint" aria-live="polite"></div>
+    <div class="hintrow">
+      <div class="namehint" id="namehint" aria-live="polite"></div>
+      <button type="button" class="mult" id="btn-mult" aria-pressed="false" disabled>I mult</button>
+    </div>
     <div class="buttons">
       <button type="button" id="btn-seen">Sett</button>
       <button type="button" id="btn-rode">Åkt</button>
@@ -215,8 +239,10 @@
   'use strict';
 
   // ---------- Data ----------
-  // Sparat format: { version: 2, entries: [{ id, model, number, kind: 'seen'|'rode', ts }] }
+  // Sparat format: { version: 2, entries: [{ id, model, number, kind: 'seen'|'rode', ts, group? }] }
   // model = t.ex. "RC6" eller "C20" (kan vara tomt), number = fordonsnumret, t.ex. "1362".
+  // group = valfritt id som delas av vagnar som gick i mult i samma tåg. Varje vagn har ändå sin egen kind
+  // (Sett/Åkt), så vi sparar vad som faktiskt hände och regeln för hur grupper räknas kan väljas senare.
   // ts = millisekunder sedan 1970 (Date.now()). Ändras formatet höjs version och migrate() uppdateras.
   // Version 1 hade ingen model, där stod hela texten i number ("RC6 1362").
   const KEY = 'tagglogg:data';
@@ -292,6 +318,7 @@
   const timeStr = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const kindLabel = k => (k === 'rode' ? 'Åkt' : 'Sett');
   const vehicleLabel = e => (e.model ? e.model + ' ' : '') + e.number;
+  const latestEntry = () => data.entries.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
 
   function dayLabel(key) {
     const now = Date.now();
@@ -328,7 +355,16 @@
   }
 
   function render() {
+    updateMult();
     const entries = data.entries.slice().sort((a, b) => b.ts - a.ts);
+    // Vagnar i samma tåg ligger alltid i en följd. De visas i den ordning de loggades (främsta först),
+    // även om listan i övrigt har senaste loggningen överst.
+    for (let i = 0; i < entries.length;) {
+      let j = i + 1;
+      while (entries[i].group && j < entries.length && entries[j].group === entries[i].group) j++;
+      if (j - i > 1) entries.splice(i, j - i, ...entries.slice(i, j).reverse());
+      i = j;
+    }
     totalEl.textContent = entries.length ? `${entries.length} loggningar` : '';
     logEl.textContent = '';
 
@@ -352,8 +388,13 @@
       day.appendChild(h);
 
       const box = el('div', 'entries');
-      for (const e of list) {
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
         const row = el('div', 'entry');
+        // Bara två eller fler intilliggande vagnar med samma grupp ritas som ett tåg i mult.
+        const linkedUp = i > 0 && !!e.group && list[i - 1].group === e.group;
+        const linkedDown = i < list.length - 1 && !!e.group && list[i + 1].group === e.group;
+        if (linkedUp || linkedDown) row.className = 'entry grp' + (linkedUp ? '' : ' first') + (linkedDown ? '' : ' last');
         row.appendChild(el('span', 'time', timeStr(e.ts)));
         const num = el('span', 'num', vehicleLabel(e));
         const nm = vehicleName(e.model, e.number);
@@ -376,13 +417,26 @@
   const modelInput = document.getElementById('model');
   const input = document.getElementById('num');
   const hintEl = document.getElementById('namehint');
+  const multBtn = document.getElementById('btn-mult');
+
+  // "I mult": nästa loggning hör till samma tåg som den senast loggade vagnen. Gäller bara en loggning
+  // (och nollställs vid omstart), så man kommer inte åt att koppla ihop olika tåg av misstag.
+  let multOn = false;
+
+  function updateMult() {
+    const prev = latestEntry();
+    if (!prev) multOn = false;
+    multBtn.disabled = !prev;
+    multBtn.setAttribute('aria-pressed', String(multOn));
+    multBtn.textContent = multOn ? `I mult med ${prev.number}` : 'I mult';
+  }
 
   // Visar vagnens namn medan man skriver, så man ser att det blev rätt tåg innan man trycker.
   function updateHint() { hintEl.textContent = vehicleName(normalize(modelInput.value), normalize(input.value)); }
 
   // Modellen förifylls med den senast loggade och står kvar efter varje loggning,
   // så flera tåg av samma serie bara kräver nummer + ett tryck.
-  const newest = data.entries.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
+  const newest = latestEntry();
   if (newest && newest.model) modelInput.value = newest.model;
 
   function addEntry(kind) {
@@ -394,9 +448,16 @@
       return;
     }
     const entry = { id: newId(), model, number, kind, ts: Date.now() };
+    const prev = latestEntry();
+    const inMult = multOn && !!prev;
+    if (inMult) {
+      if (!prev.group) prev.group = newId();   // den förra vagnen blir första vagnen i gruppen
+      entry.group = prev.group;
+    }
+    multOn = false;
     data.entries.push(entry);
     const nm = vehicleName(model, number);
-    if (save()) showToast(`Loggat: ${vehicleLabel(entry)}${nm ? ' – ' + nm : ''} (${kindLabel(kind).toLowerCase()})`);
+    if (save()) showToast(`Loggat${inMult ? ' i mult' : ''}: ${vehicleLabel(entry)}${nm ? ' – ' + nm : ''} (${kindLabel(kind).toLowerCase()})`);
     modelInput.value = model;
     input.value = '';
     updateHint();
@@ -409,9 +470,21 @@
     if (!e) return;
     if (!confirm(`Ta bort ${vehicleLabel(e)} (${kindLabel(e.kind).toLowerCase()} ${timeStr(e.ts)})?`)) return;
     data.entries = data.entries.filter(x => x.id !== id);
+    if (e.group) {
+      // En ensam vagn är inget tåg i mult: rensa gruppen om bara en vagn blev kvar.
+      const rest = data.entries.filter(x => x.group === e.group);
+      if (rest.length === 1) delete rest[0].group;
+    }
     save();
     render();
   }
+
+  multBtn.addEventListener('click', () => {
+    multOn = !multOn;
+    updateMult();
+    showToast(multOn ? `Nästa loggning går i mult med ${vehicleLabel(latestEntry())}.` : '');
+    input.focus();
+  });
 
   document.getElementById('btn-seen').addEventListener('click', () => addEntry('seen'));
   document.getElementById('btn-rode').addEventListener('click', () => addEntry('rode'));
@@ -474,7 +547,8 @@
 
   function validEntry(e) {
     return !!e && typeof e.id === 'string' && typeof e.number === 'string' && Number.isFinite(e.ts)
-      && (e.model === undefined || typeof e.model === 'string');
+      && (e.model === undefined || typeof e.model === 'string')
+      && (e.group === undefined || typeof e.group === 'string');
   }
 
   // Läser fälten, sparar dem och kollar att inget saknas. Returnerar false (och öppnar rutan) om något saknas.
