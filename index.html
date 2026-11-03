@@ -134,6 +134,8 @@
     border-top: 1px solid var(--line);
   }
   .entry:first-child { border-top: 0; }
+  .entry { cursor: pointer; }
+  .entry:active { background: var(--bg); }
   .entry .time { color: var(--muted); font-variant-numeric: tabular-nums; width: 46px; flex: none; }
   .entry .num { flex: 1; font-weight: 600; font-size: 18px; word-break: break-word; }
   .entry .num .vname { display: block; font-size: 14px; font-weight: 400; color: var(--muted); }
@@ -179,6 +181,57 @@
     border: 1px solid var(--line); border-radius: 10px;
     background: var(--card); color: var(--text);
   }
+
+  /* Ändringsrutan (dialog som glider upp underifrån) */
+  dialog.sheet {
+    border: 0; padding: 0;
+    width: 100%; max-width: 560px;
+    margin: auto auto 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--card); color: var(--text);
+    max-height: 94vh; overflow: auto;
+  }
+  dialog.sheet::backdrop { background: rgba(10, 18, 30, .55); }
+  .sheet form { padding: 18px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .sheet h2 { margin: 0 0 4px; font-size: 18px; outline: none; }
+  .sheet label { display: block; margin: 12px 0 4px; font-size: 12px; color: var(--muted); }
+  .sheet .in {
+    display: block; width: 100%; min-width: 0;
+    font-size: 20px;           /* >=16px hindrar iOS från att zooma */
+    padding: 12px;
+    border: 2px solid var(--line); border-radius: 12px;
+    background: var(--bg); color: var(--text);
+    text-transform: uppercase;
+  }
+  .sheet .in[type="date"], .sheet .in[type="time"] { font-size: 18px; text-transform: none; }
+  .sheet .in:focus { border-color: var(--accent); outline: none; }
+  .sheet .row2, .sheet .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sheet .name { min-height: 20px; margin-top: 6px; font-size: 15px; font-weight: 600; color: var(--accent); }
+  .sheet .seg button {
+    padding: 14px 8px; font-size: 17px; font-weight: 600;
+    border: 2px solid var(--line); border-radius: 12px;
+    background: var(--bg); color: var(--text);
+  }
+  .sheet .seg button[aria-pressed="true"].seen { background: var(--seen); border-color: var(--seen); color: #fff; }
+  .sheet .seg button[aria-pressed="true"].rode { background: var(--rode); border-color: var(--rode); color: #fff; }
+  .sheet .note { min-height: 18px; margin-top: 6px; font-size: 13px; color: var(--muted); }
+  .sheet .grp-info { margin-top: 10px; font-size: 14px; color: var(--muted); }
+  .sheet .grp-toggle {
+    width: 100%; margin-top: 8px; padding: 12px;
+    font-size: 15px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--bg); color: var(--text);
+  }
+  .sheet .grp-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sheet .err { min-height: 20px; margin-top: 8px; font-size: 14px; color: #dc2626; }
+  .sheet .actions { display: grid; grid-template-columns: auto 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .sheet .actions button {
+    padding: 14px 16px; font-size: 16px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card); color: var(--text);
+  }
+  .sheet .actions .danger { color: #dc2626; }
+  .sheet .actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 </style>
 </head>
 <body>
@@ -233,6 +286,49 @@
     <p>Datan sparas på den här telefonen. Spara till GitHub då och då som backup.</p>
   </footer>
 </main>
+
+<dialog class="sheet" id="edit" aria-labelledby="edit-title">
+  <form id="edit-form" novalidate>
+    <h2 id="edit-title" tabindex="-1" autofocus>Ändra loggning</h2>
+    <div class="fields">
+      <div>
+        <label for="edit-model">Modell</label>
+        <input class="in" id="edit-model" type="text" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+      </div>
+      <div>
+        <label for="edit-num">Nummer</label>
+        <input class="in" id="edit-num" type="text" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+      </div>
+    </div>
+    <div class="name" id="edit-name"></div>
+    <label>Status</label>
+    <div class="seg">
+      <button type="button" class="seen" id="edit-seen" aria-pressed="false">Sett</button>
+      <button type="button" class="rode" id="edit-rode" aria-pressed="false">Åkt</button>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="edit-date">Datum</label>
+        <input class="in" id="edit-date" type="date">
+      </div>
+      <div>
+        <label for="edit-time">Tid</label>
+        <input class="in" id="edit-time" type="time">
+      </div>
+    </div>
+    <div class="note" id="edit-timenote"></div>
+    <div id="edit-grp" hidden>
+      <div class="grp-info" id="edit-grpinfo"></div>
+      <button type="button" class="grp-toggle" id="edit-grptoggle" aria-pressed="false"></button>
+    </div>
+    <div class="err" id="edit-err" role="alert"></div>
+    <div class="actions">
+      <button type="button" class="danger" id="edit-del">Ta bort</button>
+      <button type="button" id="edit-cancel">Avbryt</button>
+      <button type="submit" class="primary">Spara</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (() => {
@@ -354,17 +450,25 @@
     return e;
   }
 
+  // Ordnar en dags loggningar (senaste först). Vagnar i samma tåg samlas till ett block som ligger där tågets
+  // senaste vagn ligger, med vagnarna i den ordning de loggades (främsta först). Blocket hålls ihop även om
+  // andra loggningar ligger mellan vagnarna i tid, till exempel efter att en tid ändrats.
+  function arrangeDay(list) {
+    const units = [];
+    const byGroup = new Map();
+    for (const e of list) {
+      if (e.group && byGroup.has(e.group)) { byGroup.get(e.group).push(e); continue; }
+      const u = [e];
+      units.push(u);
+      if (e.group) byGroup.set(e.group, u);
+    }
+    for (const u of units) if (u.length > 1) u.reverse();
+    return units.flat();
+  }
+
   function render() {
     updateMult();
     const entries = data.entries.slice().sort((a, b) => b.ts - a.ts);
-    // Vagnar i samma tåg ligger alltid i en följd. De visas i den ordning de loggades (främsta först),
-    // även om listan i övrigt har senaste loggningen överst.
-    for (let i = 0; i < entries.length;) {
-      let j = i + 1;
-      while (entries[i].group && j < entries.length && entries[j].group === entries[i].group) j++;
-      if (j - i > 1) entries.splice(i, j - i, ...entries.slice(i, j).reverse());
-      i = j;
-    }
     totalEl.textContent = entries.length ? `${entries.length} loggningar` : '';
     logEl.textContent = '';
 
@@ -380,7 +484,8 @@
       groups.get(k).push(e);
     }
 
-    for (const [key, list] of groups) {
+    for (const [key, dayList] of groups) {
+      const list = arrangeDay(dayList);
       const day = el('section', 'day');
       const h = el('h2');
       h.appendChild(el('span', '', dayLabel(key)));
@@ -391,7 +496,7 @@
       for (let i = 0; i < list.length; i++) {
         const e = list[i];
         const row = el('div', 'entry');
-        // Bara två eller fler intilliggande vagnar med samma grupp ritas som ett tåg i mult.
+        // Bara två eller fler vagnar med samma grupp samma dag ritas som ett tåg i mult.
         const linkedUp = i > 0 && !!e.group && list[i - 1].group === e.group;
         const linkedDown = i < list.length - 1 && !!e.group && list[i + 1].group === e.group;
         if (linkedUp || linkedDown) row.className = 'entry grp' + (linkedUp ? '' : ' first') + (linkedDown ? '' : ' last');
@@ -406,6 +511,12 @@
         del.setAttribute('aria-label', 'Ta bort ' + vehicleLabel(e));
         del.addEventListener('click', () => removeEntry(e.id));
         row.appendChild(del);
+        // Tryck på raden för att ändra den (✕ tar bort direkt).
+        row.tabIndex = 0;
+        row.addEventListener('click', ev => { if (!ev.target.closest('.del')) openEdit(e.id); });
+        row.addEventListener('keydown', ev => {
+          if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); openEdit(e.id); }
+        });
         box.appendChild(row);
       }
       day.appendChild(box);
@@ -492,6 +603,144 @@
   input.addEventListener('keydown', e => { if (e.key === 'Enter') addEntry('seen'); });
   modelInput.addEventListener('input', updateHint);
   input.addEventListener('input', updateHint);
+
+  // ---------- Ändra loggning ----------
+  // Tryck på en rad för att ändra modell, nummer, status, datum och tid, eller ta bort den. För en vagn i ett tåg
+  // i mult ändras tiden för hela tåget (så att tåget hålls ihop), och vagnen kan tas ur tåget eller kopplas till
+  // föregående loggning. Allt ändras på en kopia som byts in först när det gick att spara.
+  const sheet = document.getElementById('edit');
+  const eModel = document.getElementById('edit-model');
+  const eNum = document.getElementById('edit-num');
+  const eName = document.getElementById('edit-name');
+  const eSeen = document.getElementById('edit-seen');
+  const eRode = document.getElementById('edit-rode');
+  const eDate = document.getElementById('edit-date');
+  const eTime = document.getElementById('edit-time');
+  const eTimeNote = document.getElementById('edit-timenote');
+  const eGrp = document.getElementById('edit-grp');
+  const eGrpInfo = document.getElementById('edit-grpinfo');
+  const eGrpToggle = document.getElementById('edit-grptoggle');
+  const eErr = document.getElementById('edit-err');
+
+  let edit = null;   // { id, kind, toggle, prevId, origDate, origTime } medan rutan är öppen
+
+  const membersOf = (entries, g) => entries.filter(x => x.group === g);
+  const labelWithName = m => { const nm = vehicleName(m.model, m.number); return vehicleLabel(m) + (nm ? ` (${nm})` : ''); };
+
+  function openEdit(id) {
+    const e = data.entries.find(x => x.id === id);
+    if (!e) return;
+    // Loggningen närmast före i tid (för "koppla till föregående")
+    const before = data.entries.filter(x => x.id !== id && x.ts <= e.ts).sort((a, b) => b.ts - a.ts)[0] || null;
+    edit = { id, kind: e.kind === 'rode' ? 'rode' : 'seen', toggle: false, prevId: before ? before.id : null,
+             origDate: dayKey(e.ts), origTime: timeStr(e.ts) };
+    eModel.value = e.model || '';
+    eNum.value = e.number;
+    eDate.value = edit.origDate;
+    eDate.max = dayKey(Date.now());
+    eTime.value = edit.origTime;
+    updateEditUI();
+    if (sheet.showModal) sheet.showModal(); else sheet.setAttribute('open', '');
+  }
+
+  function closeEdit() {
+    if (sheet.close) sheet.close(); else sheet.removeAttribute('open');
+    edit = null;
+  }
+
+  function updateEditUI() {
+    if (!edit) return;
+    const e = data.entries.find(x => x.id === edit.id);
+    if (!e) return;
+    eErr.textContent = '';
+    eSeen.setAttribute('aria-pressed', String(edit.kind === 'seen'));
+    eRode.setAttribute('aria-pressed', String(edit.kind === 'rode'));
+    eName.textContent = vehicleName(normalize(eModel.value), normalize(eNum.value));
+
+    const mates = e.group ? membersOf(data.entries, e.group).filter(x => x.id !== e.id).sort((a, b) => a.ts - b.ts) : [];
+    const prev = edit.prevId ? data.entries.find(x => x.id === edit.prevId) : null;
+    if (mates.length) {
+      eGrp.hidden = false;
+      eGrpInfo.textContent = 'I mult med: ' + mates.map(labelWithName).join(', ');
+      eGrpToggle.textContent = edit.toggle ? 'Tas ur tåget när du sparar' : 'Ta ur tåget';
+    } else if (prev) {
+      eGrp.hidden = false;
+      eGrpInfo.textContent = '';
+      eGrpToggle.textContent = edit.toggle ? `Kopplas till ${vehicleLabel(prev)} när du sparar` : `Koppla till föregående loggning (${vehicleLabel(prev)})`;
+    } else {
+      eGrp.hidden = true;
+    }
+    eGrpToggle.setAttribute('aria-pressed', String(edit.toggle));
+    eTimeNote.textContent = mates.length && !edit.toggle ? `Datum och tid ändras för hela tåget (${mates.length + 1} vagnar).` : '';
+  }
+
+  function saveEdit() {
+    if (!edit) return;
+    const fail = msg => { eErr.textContent = msg; };
+    const number = normalize(eNum.value);
+    const model = normalize(eModel.value);
+    if (!number) return fail('Skriv ett fordonsnummer.');
+    const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(eDate.value);
+    const tm = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(eTime.value);
+    if (!dm || !tm) return fail('Välj datum och tid.');
+
+    const next = JSON.parse(JSON.stringify(data));
+    const ent = next.entries.find(x => x.id === edit.id);
+    if (!ent) { closeEdit(); return; }
+    const train = ent.group ? membersOf(next.entries, ent.group) : [];   // inklusive vagnen själv
+    const inTrain = train.length > 1;
+
+    // Orörd tid behålls exakt. Ändrad tid gäller hela tåget, utom när vagnen tas ur tåget eller kopplas till ett.
+    if (eDate.value !== edit.origDate || eTime.value !== edit.origTime) {
+      const newTs = new Date(+dm[1], +dm[2] - 1, +dm[3], +tm[1], +tm[2], 0, 0).getTime();
+      if (Number.isNaN(newTs)) return fail('Välj datum och tid.');
+      const delta = newTs - ent.ts;
+      const targets = inTrain && !edit.toggle ? train : [ent];
+      if (Math.max(...targets.map(x => x.ts + delta)) > Date.now()) return fail('Datum och tid kan inte ligga i framtiden.');
+      targets.forEach(x => { x.ts += delta; });
+    }
+
+    ent.model = model;
+    ent.number = number;
+    ent.kind = edit.kind;
+
+    if (edit.toggle) {
+      if (inTrain) {
+        const g = ent.group;
+        delete ent.group;
+        const rest = membersOf(next.entries, g);
+        if (rest.length === 1) delete rest[0].group;   // en ensam vagn är inget tåg i mult
+      } else {
+        const prev = next.entries.find(x => x.id === edit.prevId);
+        if (prev) {
+          if (!prev.group) prev.group = newId();
+          ent.group = prev.group;
+        }
+      }
+    }
+
+    const old = data;
+    data = next;
+    if (!save()) { data = old; return fail('Kunde inte spara ändringen på telefonen. Inget ändrades.'); }
+    closeEdit();
+    render();
+    showToast(`Ändrade ${vehicleLabel(ent)}.`);
+  }
+
+  document.getElementById('edit-form').addEventListener('submit', ev => { ev.preventDefault(); saveEdit(); });
+  document.getElementById('edit-cancel').addEventListener('click', closeEdit);
+  document.getElementById('edit-del').addEventListener('click', () => {
+    if (!edit) return;
+    const id = edit.id;
+    removeEntry(id);                                          // frågar först
+    if (!data.entries.some(x => x.id === id)) closeEdit();
+  });
+  eSeen.addEventListener('click', () => { edit.kind = 'seen'; updateEditUI(); });
+  eRode.addEventListener('click', () => { edit.kind = 'rode'; updateEditUI(); });
+  eGrpToggle.addEventListener('click', () => { edit.toggle = !edit.toggle; updateEditUI(); });
+  for (const inp of [eModel, eNum, eDate, eTime]) inp.addEventListener('input', updateEditUI);
+  sheet.addEventListener('click', ev => { if (ev.target === sheet) closeEdit(); });   // tryck utanför rutan
+  sheet.addEventListener('close', () => { edit = null; });                            // t.ex. Esc
 
   // ---------- GitHub-synk ----------
   // Sparar datan som JSON ({ version, entries }) i filen taglogg.json i ett privat repo (GitHubs contents-API).
