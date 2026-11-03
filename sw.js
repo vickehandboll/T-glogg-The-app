@@ -1,5 +1,5 @@
 // Höj versionen varje gång en fil i appen ändras, annars visar telefonen den gamla cachade versionen.
-const CACHE = 'tagglogg-v2';
+const CACHE = 'tagglogg-v5';
 
 const ASSETS = [
   './',
@@ -10,8 +10,13 @@ const ASSETS = [
   './icons/apple-touch-icon.png'
 ];
 
+// Namnlistan är valfri: saknas filen på servern ska appen ändå kunna installeras och uppdateras.
+const OPTIONAL = ['./vagnnamn.json'];
+
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then(cache =>
+    cache.addAll(ASSETS).then(() => Promise.all(OPTIONAL.map(u => cache.add(u).catch(() => {}))))
+  ));
   self.skipWaiting();
 });
 

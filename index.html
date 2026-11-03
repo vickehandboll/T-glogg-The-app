@@ -75,6 +75,14 @@
   }
   .logger input::placeholder { text-transform: none; font-size: 18px; }
   .logger input:focus { border-color: var(--accent); }
+  .fields { display: grid; grid-template-columns: 5fr 7fr; gap: 10px; }
+  .fields input { min-width: 0; }
+  .namehint {
+    height: 20px; line-height: 20px; margin-top: 6px;   /* fast höjd så att knapparna inte hoppar när namnet dyker upp */
+    font-size: 15px; font-weight: 600; color: var(--accent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .namehint + .buttons { margin-top: 4px; }
   .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .buttons button {
     font-size: 19px; font-weight: 600;
@@ -116,6 +124,7 @@
   .entry:first-child { border-top: 0; }
   .entry .time { color: var(--muted); font-variant-numeric: tabular-nums; width: 46px; flex: none; }
   .entry .num { flex: 1; font-weight: 600; font-size: 18px; word-break: break-word; }
+  .entry .num .vname { display: block; font-size: 14px; font-weight: 400; color: var(--muted); }
   .badge {
     font-size: 12px; font-weight: 600; color: #fff;
     padding: 3px 9px; border-radius: 999px; flex: none;
@@ -130,14 +139,13 @@
 
   footer { margin-top: 30px; }
   footer h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
-  .export, .sync { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .export button, .sync button {
+  .sync { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sync button {
     font-size: 15px; padding: 12px;
     border: 1px solid var(--line); border-radius: 12px;
     background: var(--card); color: var(--text);
   }
   .sync button:disabled { opacity: .5; }
-  footer h3.sync-title { margin-top: 26px; }
   footer p { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
 
   .gh-settings { margin-top: 12px; font-size: 14px; }
@@ -160,9 +168,15 @@
 
 <main>
   <section class="logger">
-    <input id="num" type="text" placeholder="Fordonsnummer (t.ex. Rc6 1362)"
-           autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
-           enterkeyhint="done" aria-label="Fordonsnummer">
+    <div class="fields">
+      <input id="model" type="text" placeholder="Modell"
+             autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+             enterkeyhint="next" aria-label="Fordonsmodell, t.ex. Rc6 eller C20">
+      <input id="num" type="text" inputmode="numeric" placeholder="Nummer"
+             autocomplete="off" autocorrect="off" spellcheck="false"
+             enterkeyhint="done" aria-label="Fordonsnummer">
+    </div>
+    <div class="namehint" id="namehint" aria-live="polite"></div>
     <div class="buttons">
       <button type="button" id="btn-seen">Sett</button>
       <button type="button" id="btn-rode">Åkt</button>
@@ -173,13 +187,7 @@
   <div id="log"></div>
 
   <footer>
-    <h3>Exportera</h3>
-    <div class="export">
-      <button type="button" id="exp-csv">CSV</button>
-      <button type="button" id="exp-json">JSON</button>
-    </div>
-
-    <h3 class="sync-title">GitHub-synk</h3>
+    <h3>GitHub-synk</h3>
     <div class="sync">
       <button type="button" id="gh-push">Spara till GitHub</button>
       <button type="button" id="gh-pull">Hämta från GitHub</button>
@@ -198,7 +206,7 @@
       </label>
     </details>
 
-    <p>Datan sparas på den här telefonen. Spara till GitHub eller exportera då och då som backup.</p>
+    <p>Datan sparas på den här telefonen. Spara till GitHub då och då som backup.</p>
   </footer>
 </main>
 
@@ -207,11 +215,13 @@
   'use strict';
 
   // ---------- Data ----------
-  // Sparat format: { version: 1, entries: [{ id, number, kind: 'seen'|'rode', ts }] }
+  // Sparat format: { version: 2, entries: [{ id, model, number, kind: 'seen'|'rode', ts }] }
+  // model = t.ex. "RC6" eller "C20" (kan vara tomt), number = fordonsnumret, t.ex. "1362".
   // ts = millisekunder sedan 1970 (Date.now()). Ändras formatet höjs version och migrate() uppdateras.
+  // Version 1 hade ingen model, där stod hela texten i number ("RC6 1362").
   const KEY = 'tagglogg:data';
   const BACKUP_KEY = 'tagglogg:data:backup-unreadable';
-  const VERSION = 1;
+  const VERSION = 2;
 
   const toastEl = document.getElementById('toast');
   let toastTimer;
@@ -226,9 +236,19 @@
   function emptyData() { return { version: VERSION, entries: [] }; }
 
   function migrate(d) {
-    // Här läggs framtida migreringar (version 1 -> 2 osv).
+    if ((d.version || 1) < 2) {
+      // Version 1 -> 2: "RC6 1362" delas i model "RC6" och number "1362". Det som inte följer
+      // mönstret (modell, mellanslag, siffror) lämnas orört: model blir tomt och hela texten ligger kvar i number.
+      d.entries = d.entries.map(e => {
+        const m = typeof e.number === 'string' && /^([A-ZÅÄÖ][A-ZÅÄÖ0-9]*)\s+(\d[\d\s-]*)$/.exec(e.number);
+        return Object.assign({}, e, m ? { model: m[1], number: m[2].trim() } : { model: '' });
+      });
+      d.version = 2;
+    }
     return d;
   }
+
+  let migratedFrom = null;   // sätts om sparad data var äldre och har migrerats
 
   function load() {
     let raw = null;
@@ -236,7 +256,14 @@
     if (!raw) return emptyData();
     try {
       const d = JSON.parse(raw);
-      if (d && Array.isArray(d.entries)) return migrate(d);
+      if (d && Array.isArray(d.entries)) {
+        const v = d.version || 1;
+        if (v < VERSION) {
+          // Spara originalet innan datan byggs om. Går det inte migrerar vi bara i minnet.
+          try { localStorage.setItem(KEY + ':backup-v' + v, raw); migratedFrom = v; } catch (_) {}
+        }
+        return migrate(d);
+      }
       throw new Error('oväntat format');
     } catch (e) {
       // Skriv inte över data vi inte kan läsa: spara en kopia först.
@@ -251,18 +278,20 @@
       localStorage.setItem(KEY, JSON.stringify(data));
       return true;
     } catch (e) {
-      showToast('Kunde inte spara! Exportera datan och kontrollera lagringen.', true);
+      showToast('Kunde inte spara! Spara till GitHub och kontrollera lagringen.', true);
       return false;
     }
   }
 
   let data = load();
+  if (migratedFrom) save();   // spara den migrerade datan direkt, originalet ligger kvar i backup-nyckeln
 
   // ---------- Hjälpfunktioner ----------
   const pad = n => String(n).padStart(2, '0');
   const dayKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
   const timeStr = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const kindLabel = k => (k === 'rode' ? 'Åkt' : 'Sett');
+  const vehicleLabel = e => (e.model ? e.model + ' ' : '') + e.number;
 
   function dayLabel(key) {
     const now = Date.now();
@@ -274,6 +303,18 @@
 
   function normalize(s) { return s.trim().replace(/\s+/g, ' ').toUpperCase(); }
   function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+  // ---------- Vagnarnas namn ----------
+  // vagnnamn.json: { series: { "C20": { "2045": "Ellen", ... }, "C30": { ... } } }. Namnet slås upp när det visas
+  // och sparas inte i loggen, så en uppdaterad lista gäller även äldre loggningar. Modellen måste stämma
+  // (andra serier kan ha samma nummer). Saknas filen eller kan inte läsas visas bara inga namn.
+  let names = null;
+  const own = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+
+  function vehicleName(model, number) {
+    if (!names || !own(names.series, model) || !own(names.series[model], number)) return '';
+    return String(names.series[model][number]);
+  }
 
   // ---------- Rendering ----------
   const logEl = document.getElementById('log');
@@ -314,11 +355,14 @@
       for (const e of list) {
         const row = el('div', 'entry');
         row.appendChild(el('span', 'time', timeStr(e.ts)));
-        row.appendChild(el('span', 'num', e.number));
+        const num = el('span', 'num', vehicleLabel(e));
+        const nm = vehicleName(e.model, e.number);
+        if (nm) num.appendChild(el('span', 'vname', nm));
+        row.appendChild(num);
         row.appendChild(el('span', 'badge ' + (e.kind === 'rode' ? 'rode' : 'seen'), kindLabel(e.kind)));
         const del = el('button', 'del', '✕');
         del.type = 'button';
-        del.setAttribute('aria-label', 'Ta bort ' + e.number);
+        del.setAttribute('aria-label', 'Ta bort ' + vehicleLabel(e));
         del.addEventListener('click', () => removeEntry(e.id));
         row.appendChild(del);
         box.appendChild(row);
@@ -329,18 +373,33 @@
   }
 
   // ---------- Åtgärder ----------
+  const modelInput = document.getElementById('model');
   const input = document.getElementById('num');
+  const hintEl = document.getElementById('namehint');
+
+  // Visar vagnens namn medan man skriver, så man ser att det blev rätt tåg innan man trycker.
+  function updateHint() { hintEl.textContent = vehicleName(normalize(modelInput.value), normalize(input.value)); }
+
+  // Modellen förifylls med den senast loggade och står kvar efter varje loggning,
+  // så flera tåg av samma serie bara kräver nummer + ett tryck.
+  const newest = data.entries.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
+  if (newest && newest.model) modelInput.value = newest.model;
 
   function addEntry(kind) {
+    const model = normalize(modelInput.value);
     const number = normalize(input.value);
     if (!number) {
       showToast('Skriv ett fordonsnummer först.', true);
       input.focus();
       return;
     }
-    data.entries.push({ id: newId(), number, kind, ts: Date.now() });
-    if (save()) showToast(`Loggat: ${number} (${kindLabel(kind).toLowerCase()})`);
+    const entry = { id: newId(), model, number, kind, ts: Date.now() };
+    data.entries.push(entry);
+    const nm = vehicleName(model, number);
+    if (save()) showToast(`Loggat: ${vehicleLabel(entry)}${nm ? ' – ' + nm : ''} (${kindLabel(kind).toLowerCase()})`);
+    modelInput.value = model;
     input.value = '';
+    updateHint();
     input.focus();            // håller tangentbordet uppe för nästa tåg
     render();
   }
@@ -348,7 +407,7 @@
   function removeEntry(id) {
     const e = data.entries.find(x => x.id === id);
     if (!e) return;
-    if (!confirm(`Ta bort ${e.number} (${kindLabel(e.kind).toLowerCase()} ${timeStr(e.ts)})?`)) return;
+    if (!confirm(`Ta bort ${vehicleLabel(e)} (${kindLabel(e.kind).toLowerCase()} ${timeStr(e.ts)})?`)) return;
     data.entries = data.entries.filter(x => x.id !== id);
     save();
     render();
@@ -356,51 +415,15 @@
 
   document.getElementById('btn-seen').addEventListener('click', () => addEntry('seen'));
   document.getElementById('btn-rode').addEventListener('click', () => addEntry('rode'));
+  modelInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.focus(); } });
   input.addEventListener('keydown', e => { if (e.key === 'Enter') addEntry('seen'); });
-
-  // ---------- Export ----------
-  function csvCell(v) {
-    v = String(v);
-    return /[";\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-  }
-
-  function buildCSV() {
-    // Semikolon som avgränsare och BOM så att svensk Excel öppnar filen rätt.
-    const rows = [['id', 'datum', 'tid', 'fordon', 'typ']];
-    for (const e of data.entries.slice().sort((a, b) => a.ts - b.ts)) {
-      rows.push([e.id, dayKey(e.ts), timeStr(e.ts) + ':' + pad(new Date(e.ts).getSeconds()), e.number, kindLabel(e.kind)]);
-    }
-    return '﻿' + rows.map(r => r.map(csvCell).join(';')).join('\r\n');
-  }
-
-  async function exportFile(name, mime, text) {
-    const blob = new Blob([text], { type: mime });
-    try {
-      const file = new File([blob], name, { type: mime });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: name });
-        return;
-      }
-    } catch (e) {
-      if (e && e.name === 'AbortError') return;   // användaren avbröt delningen
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  const stamp = () => dayKey(Date.now());
-  document.getElementById('exp-csv').addEventListener('click', () =>
-    exportFile(`tagglogg-${stamp()}.csv`, 'text/csv', buildCSV()));
-  document.getElementById('exp-json').addEventListener('click', () =>
-    exportFile(`tagglogg-${stamp()}.json`, 'application/json', JSON.stringify(data, null, 2)));
+  modelInput.addEventListener('input', updateHint);
+  input.addEventListener('input', updateHint);
 
   // ---------- GitHub-synk ----------
-  // Sparar samma JSON som exporten som taglogg.json i ett privat repo (GitHubs contents-API).
+  // Sparar datan som JSON ({ version, entries }) i filen taglogg.json i ett privat repo (GitHubs contents-API).
   // Varje sparning blir en commit. Telefonen är huvudlager, GitHub är backup/synk ("senaste vinner").
-  // Inställningarna (inkl. token) ligger i en egen nyckel och följer aldrig med i exporten.
+  // Inställningarna (inkl. token) ligger i en egen nyckel och följer aldrig med i datafilen.
   const GH_KEY = 'tagglogg:github';
   const PULL_BACKUP_KEY = 'tagglogg:data:backup-before-pull';
   const GH_FILE = 'taglogg.json';
@@ -450,7 +473,8 @@
   }
 
   function validEntry(e) {
-    return !!e && typeof e.id === 'string' && typeof e.number === 'string' && Number.isFinite(e.ts);
+    return !!e && typeof e.id === 'string' && typeof e.number === 'string' && Number.isFinite(e.ts)
+      && (e.model === undefined || typeof e.model === 'string');
   }
 
   // Läser fälten, sparar dem och kollar att inget saknas. Returnerar false (och öppnar rutan) om något saknas.
@@ -554,7 +578,7 @@
     }
     // Ersätter vi lokal data ska en kopia finnas kvar, annars avbryter vi.
     try { localStorage.setItem(PULL_BACKUP_KEY, JSON.stringify(data)); }
-    catch (e) { throw new Error('Kunde inte spara en säkerhetskopia av nuvarande data. Exportera JSON först. Inget ändrades.'); }
+    catch (e) { throw new Error('Kunde inte spara en säkerhetskopia av nuvarande data. Spara till GitHub först. Inget ändrades.'); }
 
     const old = data;
     data = d;
@@ -586,6 +610,10 @@
 
   // ---------- Start ----------
   render();
+  fetch('vagnnamn.json')
+    .then(r => (r.ok ? r.json() : null))
+    .then(j => { if (j && j.series) { names = j; render(); updateHint(); } })
+    .catch(() => {});
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   if ('serviceWorker' in navigator) {
